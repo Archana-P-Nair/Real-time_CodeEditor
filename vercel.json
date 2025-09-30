@@ -10,6 +10,14 @@
     {
       "src": "/api/(.*)",
       "dest": "/backend/index.ts"
+    },
+    {
+      "src": "/health",
+      "dest": "/backend/index.ts"
+    },
+    {
+      "src": "/socket.io/(.*)",
+      "dest": "/backend/index.ts"
     }
   ]
 }
