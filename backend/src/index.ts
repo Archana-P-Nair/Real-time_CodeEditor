@@ -4,7 +4,6 @@ import dotenv from 'dotenv';
 import { executeJavaScript } from './execution/javascript-service';
 import { executeCode } from './execution/piston-service'; 
 import { executionLimiter } from './middleware/security';
-
 import http from 'http';
 import { Server } from 'socket.io';
 
@@ -13,24 +12,33 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Fixed CORS configuration for Vercel
 const allowedOrigins = [
   "http://localhost:3000",
   "https://*.vercel.app",
-  "https://*.railway.app",
-  process.env.FRONTEND_URL
-].filter(Boolean);
+  "https://*.now.sh"
+];
 
+// Add FRONTEND_URL if it exists and is not undefined
+if (process.env.FRONTEND_URL) {
+  allowedOrigins.push(process.env.FRONTEND_URL);
+}
+
+// Use the function-based CORS to handle wildcard domains properly
 app.use(cors({
   origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
     
-    if (allowedOrigins.some(allowedOrigin => 
-      origin === allowedOrigin || 
-      origin?.endsWith('.railway.app') ||
-      origin?.endsWith('.vercel.app') ||
-      origin?.includes('localhost') ||
-      allowedOrigin === '*'
-    )) {
+    // Check if the origin matches any of our allowed patterns
+    if (allowedOrigins.some(allowedOrigin => {
+      if (allowedOrigin.includes('*')) {
+        // Handle wildcard domains like *.vercel.app
+        const domainPattern = allowedOrigin.replace('*.', '');
+        return origin.endsWith(domainPattern);
+      }
+      return origin === allowedOrigin;
+    }) || origin.includes('localhost')) {
       callback(null, true);
     } else {
       callback(new Error('Not allowed by CORS'));
@@ -38,6 +46,7 @@ app.use(cors({
   },
   credentials: true
 }));
+
 app.use(express.json());
 
 // --- Your HTTP API ---
@@ -65,20 +74,40 @@ app.post('/api/execute', executionLimiter, async (req, res) => {
   }
 });
 
-app.get('/health', (req, res) => {
+app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
 // --- Create HTTP server and attach socket.io ---
 const server = http.createServer(app);
+
+// Socket.io configuration with proper CORS
 const io = new Server(server, {
   cors: {
-    origin: "http://localhost:3000",
-    methods: ["GET", "POST"]
-  }
+    origin: function (origin, callback) {
+      if (!origin) return callback(null, true);
+      
+      if (allowedOrigins.some(allowedOrigin => {
+        if (allowedOrigin.includes('*')) {
+          const domainPattern = allowedOrigin.replace('*.', '');
+          return origin.endsWith(domainPattern);
+        }
+        return origin === allowedOrigin;
+      }) || origin.includes('localhost')) {
+        callback(null, true);
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
+    methods: ["GET", "POST"],
+    credentials: true
+  },
+  transports: ['polling', 'websocket'], // Vercel-compatible
+  pingTimeout: 60000,
+  pingInterval: 25000
 });
 
-// --- Socket.io logic (copy from your server.js) ---
+// --- Socket.io logic ---
 const rooms = new Map();
 
 io.on("connection", (socket) => {
@@ -196,7 +225,7 @@ io.on("connection", (socket) => {
     }
   });
 
-  // NEW: Handle output changes and broadcast to the entire room
+  // Handle output changes and broadcast to the entire room
   socket.on("output-change", ({ result, roomId }) => {
     if (roomId && rooms.has(roomId)) {
       io.to(roomId).emit("output-change", { result });
@@ -236,3 +265,6 @@ io.on("connection", (socket) => {
 server.listen(PORT, () => {
   console.log(`🚀 Backend server running on port ${PORT}`);
 });
+
+// Export for Vercel serverless functions
+export default app;
