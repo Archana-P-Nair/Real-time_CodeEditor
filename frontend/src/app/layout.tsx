@@ -1,10 +1,5 @@
+import { ApiProvider } from '@/contexts/ApiContext';
 import './globals.css';
-import { SocketProvider } from "@/contexts/SocketContext";
-
-export const metadata = {
-  title: 'Code Editor',
-  description: 'Online code editor with execution',
-};
 
 export default function RootLayout({
   children,
@@ -14,9 +9,9 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
-        <SocketProvider>
+        <ApiProvider>
           {children}
-        </SocketProvider>
+        </ApiProvider>
       </body>
     </html>
   );
