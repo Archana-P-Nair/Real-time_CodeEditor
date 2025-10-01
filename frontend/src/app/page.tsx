@@ -1,10 +1,16 @@
 "use client";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { CustomWhiteboard } from "@/components/CustomWhiteboard";
+import dynamic from 'next/dynamic';
 import { CodeEditor } from "@/components/CodeEditor";
 import { isShareUrl } from "@/lib/shareUtils";
 import { useSocket } from "@/contexts/SocketContext"; // adjust path if needed
+
+// Dynamic import for CustomWhiteboard to disable SSR
+const CustomWhiteboard = dynamic(
+  () => import('@/components/CustomWhiteboard'),
+  { ssr: false }
+);
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<"editor" | "whiteboard">("editor");
