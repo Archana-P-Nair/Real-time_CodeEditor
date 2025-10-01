@@ -1,5 +1,8 @@
-import { ApiProvider } from '@/contexts/ApiContext';
-import './globals.css';
+// frontend/src/app/layout.tsx
+export const metadata = {
+  title: 'Real-time Code Editor',
+  description: 'Collaborative coding platform',
+};
 
 export default function RootLayout({
   children,
@@ -8,11 +11,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body>
-        <ApiProvider>
-          {children}
-        </ApiProvider>
-      </body>
+      <body>{children}</body>
     </html>
   );
 }
