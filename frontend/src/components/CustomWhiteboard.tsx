@@ -302,7 +302,7 @@ export const CustomWhiteboard = () => {
     }
   }, [history, historyStep, lines, textBoxes, shapes, socket, roomId]);
 
-  const downloadCanvas = useCallback(() => {
+  const downloadCanvas = useCallback(async () => {
     const stage = stageRef.current?.getStage();
     if (!stage) {
       console.error('Stage not available for download');
@@ -310,14 +310,17 @@ export const CustomWhiteboard = () => {
     }
 
     try {
-      const tempStage = new window.Konva.Stage({
+      // Dynamically import Konva for client-side only
+      const Konva = (await import('konva')).default;
+
+      const tempStage = new Konva.Stage({
         container: document.createElement('div'),
         width: stage.width(),
         height: stage.height(),
       });
 
-      const backgroundLayer = new window.Konva.Layer();
-      const background = new window.Konva.Rect({
+      const backgroundLayer = new Konva.Layer();
+      const background = new Konva.Rect({
         x: 0,
         y: 0,
         width: stage.width(),
@@ -327,7 +330,7 @@ export const CustomWhiteboard = () => {
       backgroundLayer.add(background);
 
       const originalLayer = stage.getLayers()[0];
-      const clonedLayer = new window.Konva.Layer();
+      const clonedLayer = new Konva.Layer();
       
       originalLayer.getChildren().forEach((node) => {
         const clonedNode = node.clone();
@@ -968,7 +971,7 @@ export const CustomWhiteboard = () => {
             ))}
             <Transformer
               ref={transformerRef}
-              enabledAnchors={['middle-left', 'middle-right', 'top-center', 'bottom-center']}
+              enabledAnchors={['middle-left', 'middle-right around-top-center', 'bottom-center']}
               boundBoxFunc={(oldBox, newBox) => {
                 newBox.width = Math.max(50, newBox.width);
                 newBox.height = Math.max(30, newBox.height);
