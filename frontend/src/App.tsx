@@ -1,7 +1,13 @@
 import { useState, useEffect } from 'react';
+import dynamic from 'next/dynamic';
 import { CodeEditor } from './components/CodeEditor';
-import { CustomWhiteboard } from './components/CustomWhiteboard';
 import { useSocket, SocketProvider } from './contexts/SocketContext';
+
+// Dynamic import for CustomWhiteboard to disable SSR
+const CustomWhiteboard = dynamic(
+  () => import('./components/CustomWhiteboard'),
+  { ssr: false }
+);
 
 function Header() {
   const { roomId, createRoom, joinRoom, isConnected } = useSocket();
