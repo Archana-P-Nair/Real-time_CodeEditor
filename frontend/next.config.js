@@ -5,6 +5,8 @@ const nextConfig = {
       config.resolve.fallback = {
         ...config.resolve.fallback,
         canvas: false,
+        // Optionally stub konva to ensure no server-side imports
+        konva: false,
       };
     }
     return config;
