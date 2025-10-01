@@ -1,21 +1,23 @@
 // frontend/src/app/layout.tsx
-import './globals.css'; // Import global CSS
-import { ReactNode } from 'react'; // Import ReactNode type
+import './globals.css';
+import { SocketProvider } from "@/contexts/SocketContext";
 
 export const metadata = {
-  title: 'Real-time Code Editor',
-  description: 'Collaborative coding platform',
+  title: 'Code Editor',
+  description: 'Online code editor with execution',
 };
 
 export default function RootLayout({
   children,
 }: {
-  children: ReactNode; // Use ReactNode type
+  children: React.ReactNode;
 }) {
   return (
     <html lang="en">
-      <body className="min-h-screen bg-gray-900 text-white">
-        {children}
+      <body>
+        <SocketProvider>
+          {children}
+        </SocketProvider>
       </body>
     </html>
   );
