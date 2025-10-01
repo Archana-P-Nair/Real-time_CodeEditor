@@ -1,9 +1,18 @@
 "use client";
 
 import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
-import { Stage, Layer, Line, Text, Transformer, Rect, Circle } from 'react-konva';
+import dynamic from 'next/dynamic';
 import { ShareButton } from './ShareButton';
 import { useSocket } from '@/contexts/SocketContext';
+
+// Dynamically import react-konva components to disable SSR
+const Stage = dynamic(() => import('react-konva').then(mod => mod.Stage), { ssr: false });
+const Layer = dynamic(() => import('react-konva').then(mod => mod.Layer), { ssr: false });
+const Line = dynamic(() => import('react-konva').then(mod => mod.Line), { ssr: false });
+const Text = dynamic(() => import('react-konva').then(mod => mod.Text), { ssr: false });
+const Transformer = dynamic(() => import('react-konva').then(mod => mod.Transformer), { ssr: false });
+const Rect = dynamic(() => import('react-konva').then(mod => mod.Rect), { ssr: false });
+const Circle = dynamic(() => import('react-konva').then(mod => mod.Circle), { ssr: false });
 
 interface Point {
   x: number;
@@ -60,7 +69,7 @@ export const CustomWhiteboard = () => {
   const [isDrawing, setIsDrawing] = useState(false);
   const [currentTool, setCurrentTool] = useState('pen');
   const [currentColor, setCurrentColor] = useState('#000000');
-  const [currentSize, setCurrentSize] = useState(5); // Ensure currentSize is defined
+  const [currentSize, setCurrentSize] = useState(5);
   const [lines, setLines] = useState<LineData[]>([]);
   const [textBoxes, setTextBoxes] = useState<TextBox[]>([]);
   const [shapes, setShapes] = useState<Shape[]>([]);
@@ -93,7 +102,6 @@ export const CustomWhiteboard = () => {
         console.error('WebSocket connection error:', error);
       });
 
-      // Listen for room join confirmation with initial whiteboard state
       socket.on('room-joined', ({ roomId, users, code, language, output, whiteboard }: any) => {
         console.log('Room joined with whiteboard state:', whiteboard);
         if (whiteboard) {
@@ -111,12 +119,10 @@ export const CustomWhiteboard = () => {
         
         const now = Date.now();
         
-        // Check if this is a clear operation (all arrays are empty)
         const isClearOperation = (data.lines?.length === 0 && data.textBoxes?.length === 0 && data.shapes?.length === 0);
         
         if (isClearOperation) {
           console.log('Processing clear operation from socket - applying immediately', { clearOperationId: data.clearOperationId });
-          // For clear operations, apply immediately without any delays or checks
           setLines([]);
           setTextBoxes([]);
           setShapes([]);
@@ -127,8 +133,6 @@ export const CustomWhiteboard = () => {
           return;
         }
         
-        // For non-clear operations, apply the existing logic
-        // Prevent updates if we're currently drawing or if updates are too frequent
         if (isDrawing || (now - lastUpdateTime < 200)) {
           console.log('Skipping update - currently drawing or too frequent');
           return;
@@ -137,7 +141,6 @@ export const CustomWhiteboard = () => {
         setLastUpdateTime(now);
         setIsUpdatingFromSocket(true);
         
-        // Use a longer delay to prevent conflicts with local updates
         setTimeout(() => {
           setLines(data.lines || []);
           setTextBoxes(data.textBoxes || []);
@@ -167,12 +170,9 @@ export const CustomWhiteboard = () => {
     }
   }, [socket, roomId]);
 
-  // Sync whiteboard state when it changes (with better debouncing)
   useEffect(() => {
     if (socket && roomId && !isUpdatingFromSocket && (lines.length > 0 || textBoxes.length > 0 || shapes.length > 0)) {
-      // Use a longer debounce to prevent flickering
       const timeoutId = setTimeout(() => {
-        // Only sync if we're not in the middle of a clear operation
         if (!isClearing) {
           console.log('Whiteboard state changed - syncing:', { 
             lines: lines.length, 
@@ -186,7 +186,7 @@ export const CustomWhiteboard = () => {
         } else {
           console.log('Skipping sync - clear operation in progress');
         }
-      }, 500); // Increased debounce time to prevent conflicts
+      }, 500);
 
       return () => clearTimeout(timeoutId);
     }
@@ -194,7 +194,6 @@ export const CustomWhiteboard = () => {
 
   const debouncedSaveState = useCallback(debounce((lines: LineData[], textBoxes: TextBox[], shapes: Shape[]) => {
     if (socket && roomId && !isUpdatingFromSocket) {
-      // Only prevent sync if we're actively clearing (not just the flag being set)
       if (!isClearing) {
         console.log('Emitting whiteboard-update from debouncedSaveState:', { lines, textBoxes, shapes, roomId });
         socket.emit('whiteboard-update', { lines, textBoxes, shapes, roomId });
@@ -202,7 +201,7 @@ export const CustomWhiteboard = () => {
         console.log('Skipping debouncedSaveState - clear operation in progress');
       }
     }
-  }, 500), [socket, roomId, isUpdatingFromSocket, isClearing]); // Increased debounce time
+  }, 500), [socket, roomId, isUpdatingFromSocket, isClearing]);
 
   const saveState = useCallback(() => {
     if (isUpdatingFromSocket) return;
@@ -222,16 +221,14 @@ export const CustomWhiteboard = () => {
     if (step < 0 || step >= history.length) return;
     const state = history[step];
     
-    // Set updating flag to prevent conflicts
     setIsUpdatingFromSocket(true);
-    setIsClearing(false); // Ensure we're not in clearing mode
+    setIsClearing(false);
     
     setLines(state.lines);
     setTextBoxes(state.textBoxes);
     setShapes(state.shapes);
     setHistoryStep(step);
 
-    // Immediately sync undo/redo operations to other users
     if (socket && roomId) {
       console.log('Syncing undo/redo operation:', { 
         lines: state.lines.length, 
@@ -246,7 +243,6 @@ export const CustomWhiteboard = () => {
           shapes: state.shapes, 
           roomId 
         });
-        // Reset the flag after sync
         setTimeout(() => {
           setIsUpdatingFromSocket(false);
         }, 100);
@@ -265,15 +261,12 @@ export const CustomWhiteboard = () => {
   }, [historyStep, history.length, restoreState]);
 
   const clearCanvas = useCallback(() => {
-    // Generate unique clear operation ID
     const operationId = Date.now();
     setClearOperationId(operationId);
     
-    // Set flags to prevent conflicts
     setIsUpdatingFromSocket(true);
     setIsClearing(true);
     
-    // Save current state to history before clearing
     const newHistory = [...history.slice(0, historyStep + 1), {
       lines: JSON.parse(JSON.stringify(lines)),
       textBoxes: JSON.parse(JSON.stringify(textBoxes)),
@@ -290,10 +283,8 @@ export const CustomWhiteboard = () => {
     setCurrentLine(null);
     setCurrentShape(null);
     
-    // Immediately sync clear operation to other users
     if (socket && roomId) {
       console.log('Syncing clear canvas operation:', { roomId, operationId });
-      // Send immediately without delay for real-time delete
       socket.emit('whiteboard-update', { 
         lines: [], 
         textBoxes: [], 
@@ -301,7 +292,6 @@ export const CustomWhiteboard = () => {
         roomId,
         clearOperationId: operationId
       });
-      // Reset the flags after a short delay
       setTimeout(() => {
         setIsUpdatingFromSocket(false);
         setIsClearing(false);
@@ -320,16 +310,14 @@ export const CustomWhiteboard = () => {
     }
 
     try {
-      // Create a temporary stage with white background for download
-      const tempStage = new Konva.Stage({
+      const tempStage = new window.Konva.Stage({
         container: document.createElement('div'),
         width: stage.width(),
         height: stage.height(),
       });
 
-      // Create a white background layer
-      const backgroundLayer = new Konva.Layer();
-      const background = new Konva.Rect({
+      const backgroundLayer = new window.Konva.Layer();
+      const background = new window.Konva.Rect({
         x: 0,
         y: 0,
         width: stage.width(),
@@ -338,36 +326,29 @@ export const CustomWhiteboard = () => {
       });
       backgroundLayer.add(background);
 
-      // Clone all elements from the original stage
       const originalLayer = stage.getLayers()[0];
-      const clonedLayer = new Konva.Layer();
+      const clonedLayer = new window.Konva.Layer();
       
-      // Clone all shapes, lines, and text
       originalLayer.getChildren().forEach((node) => {
         const clonedNode = node.clone();
         clonedLayer.add(clonedNode);
       });
 
-      // Add layers to temp stage
       tempStage.add(backgroundLayer);
       tempStage.add(clonedLayer);
 
-      // Get the data URL with white background
       const dataURL = tempStage.toDataURL({
         mimeType: 'image/png',
         quality: 1,
-        pixelRatio: 2, // Higher quality
+        pixelRatio: 2,
       });
 
-      // Clean up temporary stage
       tempStage.destroy();
 
-      // Create a temporary link element to trigger download
       const link = document.createElement('a');
       link.download = `whiteboard-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.png`;
       link.href = dataURL;
       
-      // Trigger the download
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -411,7 +392,6 @@ export const CustomWhiteboard = () => {
     const newTextBoxes = [...textBoxes, newTextBox];
     setTextBoxes(newTextBoxes);
     
-    // Immediately sync text boxes to other users
     if (socket && roomId && !isUpdatingFromSocket) {
       console.log('Syncing text box creation:', { textBoxes: newTextBoxes.length, roomId });
       setTimeout(() => {
@@ -430,7 +410,7 @@ export const CustomWhiteboard = () => {
   const startDrawing = useCallback((e: any) => {
     console.log('startDrawing:', { tool: currentTool, isDrawing, target: e.target.getClassName() });
     if (currentTool === 'text' && (e.target.getClassName() === 'Text' || e.target.getParent()?.getClassName() === 'Text')) {
-      return; // Let onDblClick handle editing
+      return;
     }
     if (currentTool === 'select' && e.target === e.target.getStage()) {
       setIsDraggingStage(true);
@@ -450,7 +430,7 @@ export const CustomWhiteboard = () => {
       const newLine: LineData = {
         points: [pos.x, pos.y],
         color: currentColor,
-        size: currentSize, // Use defined currentSize
+        size: currentSize,
         tool: currentTool,
       };
       setCurrentLine(newLine);
@@ -464,7 +444,7 @@ export const CustomWhiteboard = () => {
         width: 0,
         height: 0,
         color: currentColor,
-        strokeWidth: currentSize, // Use defined currentSize
+        strokeWidth: currentSize,
       };
       setCurrentShape(newShape);
     }
@@ -483,7 +463,7 @@ export const CustomWhiteboard = () => {
       setLastPointerPosition({ x: point.x, y: point.y });
       return;
     }
-    if (!isDrawing || isUpdatingFromSocket) return; // Prevent drawing during socket updates
+    if (!isDrawing || isUpdatingFromSocket) return;
     const pos = getStagePos(e);
     updateCoordinates(e);
     if (currentTool === 'pen' && currentLine) {
@@ -532,7 +512,6 @@ export const CustomWhiteboard = () => {
           const newShapes = [...shapes, { ...currentShape }];
           setShapes(newShapes);
           
-          // Immediately sync shapes to other users
           if (socket && roomId && !isUpdatingFromSocket) {
             console.log('Syncing shape creation:', { 
               shapes: newShapes.length, 
@@ -596,7 +575,6 @@ export const CustomWhiteboard = () => {
       );
       setTextBoxes(updatedTextBoxes);
       
-      // Immediately sync text box changes to other users
       if (socket && roomId && !isUpdatingFromSocket) {
         setTimeout(() => {
           socket.emit('whiteboard-update', { 
@@ -636,7 +614,6 @@ export const CustomWhiteboard = () => {
     );
     setTextBoxes(updatedTextBoxes);
     
-    // Immediately sync text box position changes to other users
     if (socket && roomId && !isUpdatingFromSocket) {
       setTimeout(() => {
         socket.emit('whiteboard-update', { 
@@ -777,7 +754,6 @@ export const CustomWhiteboard = () => {
     );
   }
 
-  // Debug info
   console.log('Whiteboard Debug:', {
     socket: !!socket,
     socketConnected: socket?.connected,
@@ -976,7 +952,6 @@ export const CustomWhiteboard = () => {
                   );
                   setTextBoxes(updatedTextBoxes);
                   
-                  // Immediately sync text box resize changes to other users
                   if (socket && roomId && !isUpdatingFromSocket) {
                     setTimeout(() => {
                       socket.emit('whiteboard-update', { 
