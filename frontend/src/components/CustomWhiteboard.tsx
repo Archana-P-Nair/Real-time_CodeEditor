@@ -1,256 +1,169 @@
 "use client";
 
-import { useRef, useEffect, useState, useCallback, useMemo } from 'react';
-import dynamic from 'next/dynamic';
-import { ShareButton } from './ShareButton';
+import { useRef, useEffect, useState, useCallback } from 'react';
 import { useSocket } from '@/contexts/SocketContext';
-
-// Dynamically import react-konva components to disable SSR
-const Stage = dynamic(() => import('react-konva').then(mod => mod.Stage), { ssr: false });
-const Layer = dynamic(() => import('react-konva').then(mod => mod.Layer), { ssr: false });
-const Line = dynamic(() => import('react-konva').then(mod => mod.Line), { ssr: false });
-const Text = dynamic(() => import('react-konva').then(mod => mod.Text), { ssr: false });
-const Transformer = dynamic(() => import('react-konva').then(mod => mod.Transformer), { ssr: false });
-const Rect = dynamic(() => import('react-konva').then(mod => mod.Rect), { ssr: false });
-const Circle = dynamic(() => import('react-konva').then(mod => mod.Circle), { ssr: false });
+import { ShareButton } from './ShareButton';
 
 interface Point {
   x: number;
   y: number;
 }
 
-interface TextBox {
-  id: string;
-  x: number;
-  y: number;
-  text: string;
-  width: number;
-  height: number;
-}
-
-interface Shape {
-  id: string;
-  type: 'rectangle' | 'circle' | 'line';
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  color: string;
-  strokeWidth: number;
-}
-
 interface DrawingHistory {
-  lines: LineData[];
-  textBoxes: TextBox[];
-  shapes: Shape[];
+  dataURL: string;
   timestamp: number;
-}
-
-interface LineData {
-  points: number[];
-  color: string;
-  size: number;
-  tool: string;
-}
-
-function debounce(func: Function, wait: number) {
-  let timeout: NodeJS.Timeout;
-  return (...args: any[]) => {
-    clearTimeout(timeout);
-    timeout = setTimeout(() => func(...args), wait);
-  };
 }
 
 export const CustomWhiteboard = () => {
   const { socket, roomId } = useSocket();
-  const stageRef = useRef<any>(null);
-  const layerRef = useRef<any>(null);
-  const transformerRef = useRef<any>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [currentTool, setCurrentTool] = useState('pen');
   const [currentColor, setCurrentColor] = useState('#000000');
   const [currentSize, setCurrentSize] = useState(5);
-  const [lines, setLines] = useState<LineData[]>([]);
-  const [textBoxes, setTextBoxes] = useState<TextBox[]>([]);
-  const [shapes, setShapes] = useState<Shape[]>([]);
-  const [selectedTextBoxId, setSelectedTextBoxId] = useState<string | null>(null);
+  const [startPos, setStartPos] = useState<Point>({ x: 0, y: 0 });
   const [history, setHistory] = useState<DrawingHistory[]>([]);
   const [historyStep, setHistoryStep] = useState(-1);
+  const [savedImageData, setSavedImageData] = useState<ImageData | null>(null);
   const [coordinates, setCoordinates] = useState('Position: (0, 0)');
-  const [shareUrl, setShareUrl] = useState('');
-  const [currentLine, setCurrentLine] = useState<LineData | null>(null);
-  const [currentShape, setCurrentShape] = useState<Shape | null>(null);
-  const [stageScale, setStageScale] = useState(1);
-  const [stagePosition, setStagePosition] = useState({ x: 0, y: 0 });
-  const [isDraggingStage, setIsDraggingStage] = useState(false);
-  const [lastPointerPosition, setLastPointerPosition] = useState({ x: 0, y: 0 });
-  const [isClient, setIsClient] = useState(false);
-  const [isUpdatingFromSocket, setIsUpdatingFromSocket] = useState(false);
-  const [lastUpdateTime, setLastUpdateTime] = useState(0);
-  const [isClearing, setIsClearing] = useState(false);
-  const [clearOperationId, setClearOperationId] = useState(0);
+  const isUpdatingFromSocket = useRef(false);
 
-  // Handle client-side rendering for SSR
-  useEffect(() => {
-    setIsClient(true);
+  const ctx = useRef<CanvasRenderingContext2D | null>(null);
+
+  // Apply a canvas image from dataURL (used when receiving sync from others)
+  const applyDataURL = useCallback((dataURL: string) => {
+    const canvas = canvasRef.current;
+    if (!canvas || !ctx.current || !dataURL) return;
+    const img = new Image();
+    img.onload = () => {
+      ctx.current!.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.current!.drawImage(img, 0, 0);
+    };
+    img.src = dataURL;
   }, []);
 
-  // Initialize WebSocket and sync state
+  // Real-time sync: listen for whiteboard updates from other users
   useEffect(() => {
-    if (socket && roomId) {
-      socket.on('connect_error', (error: any) => {
-        console.error('WebSocket connection error:', error);
-      });
+    if (!socket || !roomId) return;
 
-      socket.on('room-joined', ({ roomId, users, code, language, output, whiteboard }: any) => {
-        console.log('Room joined with whiteboard state:', whiteboard);
-        if (whiteboard) {
-          setIsUpdatingFromSocket(true);
-          setLines(whiteboard.lines || []);
-          setTextBoxes(whiteboard.textBoxes || []);
-          setShapes(whiteboard.shapes || []);
-          setIsUpdatingFromSocket(false);
-        }
-      });
+    const onWhiteboardUpdate = (data: { canvasDataURL?: string; clearOperationId?: number }) => {
+      if (isUpdatingFromSocket.current) return;
+      if (data.canvasDataURL) {
+        isUpdatingFromSocket.current = true;
+        applyDataURL(data.canvasDataURL);
+        setHistory([{ dataURL: data.canvasDataURL, timestamp: Date.now() }]);
+        setHistoryStep(0);
+        setTimeout(() => { isUpdatingFromSocket.current = false; }, 100);
+      }
+    };
 
-      socket.on('whiteboard-update', (data: { lines: LineData[], textBoxes: TextBox[], shapes: Shape[], clearOperationId?: number }) => {
-        console.log('Received whiteboard update:', data);
-        console.log('Current state before update:', { lines: lines.length, textBoxes: textBoxes.length, shapes: shapes.length });
-        
-        const now = Date.now();
-        
-        const isClearOperation = (data.lines?.length === 0 && data.textBoxes?.length === 0 && data.shapes?.length === 0);
-        
-        if (isClearOperation) {
-          console.log('Processing clear operation from socket - applying immediately', { clearOperationId: data.clearOperationId });
-          setLines([]);
-          setTextBoxes([]);
-          setShapes([]);
-          setIsUpdatingFromSocket(false);
-          setIsClearing(false);
-          setLastUpdateTime(now);
-          setClearOperationId(data.clearOperationId || 0);
-          return;
-        }
-        
-        if (isDrawing || (now - lastUpdateTime < 200)) {
-          console.log('Skipping update - currently drawing or too frequent');
-          return;
-        }
-        
-        setLastUpdateTime(now);
-        setIsUpdatingFromSocket(true);
-        
-        setTimeout(() => {
-          setLines(data.lines || []);
-          setTextBoxes(data.textBoxes || []);
-          setShapes(data.shapes || []);
-          setIsUpdatingFromSocket(false);
-          console.log('Whiteboard state updated from socket');
-        }, 100);
-      });
+    const onWhiteboardState = (data: { canvasDataURL?: string }) => {
+      if (data.canvasDataURL) {
+        isUpdatingFromSocket.current = true;
+        applyDataURL(data.canvasDataURL);
+        setHistory([{ dataURL: data.canvasDataURL, timestamp: Date.now() }]);
+        setHistoryStep(0);
+        setTimeout(() => { isUpdatingFromSocket.current = false; }, 100);
+      }
+    };
 
-      socket.on('whiteboard-state', (data: { lines: LineData[], textBoxes: TextBox[], shapes: Shape[] }) => {
-        console.log('Received whiteboard state:', data);
-        setIsUpdatingFromSocket(true);
-        setLines(data.lines || []);
-        setTextBoxes(data.textBoxes || []);
-        setShapes(data.shapes || []);
-        setIsUpdatingFromSocket(false);
-      });
+    const onRoomJoined = (payload: { whiteboard?: { canvasDataURL?: string } }) => {
+      if (payload.whiteboard?.canvasDataURL) {
+        isUpdatingFromSocket.current = true;
+        applyDataURL(payload.whiteboard.canvasDataURL);
+        setHistory([{ dataURL: payload.whiteboard.canvasDataURL, timestamp: Date.now() }]);
+        setHistoryStep(0);
+        setTimeout(() => { isUpdatingFromSocket.current = false; }, 100);
+      }
+    };
 
-      socket.emit('request-whiteboard-state', { roomId });
+    socket.on('whiteboard-update', onWhiteboardUpdate);
+    socket.on('whiteboard-state', onWhiteboardState);
+    socket.on('room-joined', onRoomJoined);
+    socket.emit('request-whiteboard-state', { roomId });
 
-      return () => {
-        socket.off('room-joined');
-        socket.off('whiteboard-update');
-        socket.off('whiteboard-state');
-        socket.off('connect_error');
-      };
+    return () => {
+      socket.off('whiteboard-update', onWhiteboardUpdate);
+      socket.off('whiteboard-state', onWhiteboardState);
+      socket.off('room-joined', onRoomJoined);
+    };
+  }, [socket, roomId, applyDataURL]);
+
+  // Emit canvas state to room (debounced so we don’t spam)
+  const emitWhiteboardUpdate = useCallback((dataURL: string) => {
+    if (socket && roomId && !isUpdatingFromSocket.current) {
+      socket.emit('whiteboard-update', { roomId, canvasDataURL: dataURL });
     }
   }, [socket, roomId]);
 
+  // Initialize canvas
   useEffect(() => {
-    if (socket && roomId && !isUpdatingFromSocket && (lines.length > 0 || textBoxes.length > 0 || shapes.length > 0)) {
-      const timeoutId = setTimeout(() => {
-        if (!isClearing) {
-          console.log('Whiteboard state changed - syncing:', { 
-            lines: lines.length, 
-            textBoxes: textBoxes.length, 
-            shapes: shapes.length,
-            socketConnected: socket.connected,
-            roomId,
-            clearOperationId
-          });
-          socket.emit('whiteboard-update', { lines, textBoxes, shapes, roomId });
-        } else {
-          console.log('Skipping sync - clear operation in progress');
-        }
-      }, 500);
+    const canvas = canvasRef.current;
+    if (!canvas) return;
 
-      return () => clearTimeout(timeoutId);
-    }
-  }, [lines, textBoxes, shapes, socket, roomId, isUpdatingFromSocket, isClearing, clearOperationId]);
+    const resizeCanvas = () => {
+      const container = canvas.parentElement;
+      if (!container) return;
 
-  const debouncedSaveState = useCallback(debounce((lines: LineData[], textBoxes: TextBox[], shapes: Shape[]) => {
-    if (socket && roomId && !isUpdatingFromSocket) {
-      if (!isClearing) {
-        console.log('Emitting whiteboard-update from debouncedSaveState:', { lines, textBoxes, shapes, roomId });
-        socket.emit('whiteboard-update', { lines, textBoxes, shapes, roomId });
-      } else {
-        console.log('Skipping debouncedSaveState - clear operation in progress');
+      const rect = container.getBoundingClientRect();
+      canvas.width = rect.width;
+      canvas.height = rect.height;
+
+      if (historyStep >= 0 && history[historyStep]) {
+        const img = new Image();
+        img.onload = () => {
+          ctx.current?.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.current?.drawImage(img, 0, 0);
+        };
+        img.src = history[historyStep].dataURL;
       }
+    };
+
+    ctx.current = canvas.getContext('2d');
+    if (ctx.current) {
+      ctx.current.lineCap = 'round';
+      ctx.current.lineJoin = 'round';
+      ctx.current.imageSmoothingEnabled = true;
     }
-  }, 500), [socket, roomId, isUpdatingFromSocket, isClearing]);
+
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+
+    saveState();
+
+    return () => {
+      window.removeEventListener('resize', resizeCanvas);
+    };
+  }, []);
 
   const saveState = useCallback(() => {
-    if (isUpdatingFromSocket) return;
-    const newHistory = [...history.slice(0, historyStep + 1), {
-      lines: JSON.parse(JSON.stringify(lines)),
-      textBoxes: JSON.parse(JSON.stringify(textBoxes)),
-      shapes: JSON.parse(JSON.stringify(shapes)),
-      timestamp: Date.now(),
-    }];
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const newHistory = history.slice(0, historyStep + 1);
+    const dataURL = canvas.toDataURL();
+    newHistory.push({ dataURL, timestamp: Date.now() });
+
     if (newHistory.length > 50) newHistory.shift();
+
     setHistory(newHistory);
     setHistoryStep(newHistory.length - 1);
-    debouncedSaveState(lines, textBoxes, shapes);
-  }, [history, historyStep, lines, textBoxes, shapes, debouncedSaveState, isUpdatingFromSocket]);
+    emitWhiteboardUpdate(dataURL);
+  }, [history, historyStep, emitWhiteboardUpdate]);
 
   const restoreState = useCallback((step: number) => {
-    if (step < 0 || step >= history.length) return;
-    const state = history[step];
-    
-    setIsUpdatingFromSocket(true);
-    setIsClearing(false);
-    
-    setLines(state.lines);
-    setTextBoxes(state.textBoxes);
-    setShapes(state.shapes);
-    setHistoryStep(step);
+    const canvas = canvasRef.current;
+    if (!canvas || !ctx.current || step < 0 || step >= history.length) return;
 
-    if (socket && roomId) {
-      console.log('Syncing undo/redo operation:', { 
-        lines: state.lines.length, 
-        textBoxes: state.textBoxes.length, 
-        shapes: state.shapes.length, 
-        roomId 
-      });
-      setTimeout(() => {
-        socket.emit('whiteboard-update', { 
-          lines: state.lines, 
-          textBoxes: state.textBoxes, 
-          shapes: state.shapes, 
-          roomId 
-        });
-        setTimeout(() => {
-          setIsUpdatingFromSocket(false);
-        }, 100);
-      }, 200);
-    } else {
-      setIsUpdatingFromSocket(false);
-    }
-  }, [history, socket, roomId]);
+    const img = new Image();
+    img.onload = () => {
+      ctx.current!.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.current!.drawImage(img, 0, 0);
+    };
+    img.src = history[step].dataURL;
+    setHistoryStep(step);
+    emitWhiteboardUpdate(history[step].dataURL);
+  }, [history, emitWhiteboardUpdate]);
 
   const undo = useCallback(() => {
     if (historyStep > 0) restoreState(historyStep - 1);
@@ -261,525 +174,160 @@ export const CustomWhiteboard = () => {
   }, [historyStep, history.length, restoreState]);
 
   const clearCanvas = useCallback(() => {
-    const operationId = Date.now();
-    setClearOperationId(operationId);
-    
-    setIsUpdatingFromSocket(true);
-    setIsClearing(true);
-    
-    const newHistory = [...history.slice(0, historyStep + 1), {
-      lines: JSON.parse(JSON.stringify(lines)),
-      textBoxes: JSON.parse(JSON.stringify(textBoxes)),
-      shapes: JSON.parse(JSON.stringify(shapes)),
-      timestamp: Date.now(),
-    }];
-    if (newHistory.length > 50) newHistory.shift();
-    setHistory(newHistory);
-    setHistoryStep(newHistory.length - 1);
-    
-    setLines([]);
-    setTextBoxes([]);
-    setShapes([]);
-    setCurrentLine(null);
-    setCurrentShape(null);
-    
-    if (socket && roomId) {
-      console.log('Syncing clear canvas operation:', { roomId, operationId });
-      socket.emit('whiteboard-update', { 
-        lines: [], 
-        textBoxes: [], 
-        shapes: [], 
-        roomId,
-        clearOperationId: operationId
-      });
-      setTimeout(() => {
-        setIsUpdatingFromSocket(false);
-        setIsClearing(false);
-      }, 50);
-    } else {
-      setIsUpdatingFromSocket(false);
-      setIsClearing(false);
-    }
-  }, [history, historyStep, lines, textBoxes, shapes, socket, roomId]);
+    const canvas = canvasRef.current;
+    if (!canvas || !ctx.current) return;
 
-  const downloadCanvas = useCallback(async () => {
-    const stage = stageRef.current?.getStage();
-    if (!stage) {
-      console.error('Stage not available for download');
-      return;
-    }
+    ctx.current.clearRect(0, 0, canvas.width, canvas.height);
+    saveState();
+  }, [saveState]);
 
-    try {
-      // Dynamically import Konva for client-side only
-      const Konva = (await import('konva')).default;
-
-      const tempStage = new Konva.Stage({
-        container: document.createElement('div'),
-        width: stage.width(),
-        height: stage.height(),
-      });
-
-      const backgroundLayer = new Konva.Layer();
-      const background = new Konva.Rect({
-        x: 0,
-        y: 0,
-        width: stage.width(),
-        height: stage.height(),
-        fill: 'white',
-      });
-      backgroundLayer.add(background);
-
-      const originalLayer = stage.getLayers()[0];
-      const clonedLayer = new Konva.Layer();
-      
-      originalLayer.getChildren().forEach((node) => {
-        const clonedNode = node.clone();
-        clonedLayer.add(clonedNode);
-      });
-
-      tempStage.add(backgroundLayer);
-      tempStage.add(clonedLayer);
-
-      const dataURL = tempStage.toDataURL({
-        mimeType: 'image/png',
-        quality: 1,
-        pixelRatio: 2,
-      });
-
-      tempStage.destroy();
-
-      const link = document.createElement('a');
-      link.download = `whiteboard-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.png`;
-      link.href = dataURL;
-      
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      
-      console.log('Whiteboard image downloaded successfully with white background');
-    } catch (error) {
-      console.error('Error downloading whiteboard image:', error);
-    }
+  const getMousePos = useCallback((e: React.MouseEvent | MouseEvent) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+    };
   }, []);
 
-  const getStagePos = useCallback((e: any) => {
-    const stage = stageRef.current?.getStage();
-    if (!stage || !stage.getPointerPosition) {
-      console.warn('Stage or pointer position not available');
-      return { x: 0, y: 0 };
-    }
-    const pointerPos = stage.getPointerPosition();
-    return {
-      x: (pointerPos.x - stagePosition.x) / stageScale,
-      y: (pointerPos.y - stagePosition.y) / stageScale,
-    };
-  }, [stageScale, stagePosition]);
-
-  const updateCoordinates = useCallback((e: any) => {
-    const pos = getStagePos(e);
+  const updateCoordinates = useCallback((e: React.MouseEvent) => {
+    const pos = getMousePos(e);
     setCoordinates(`Position: (${Math.round(pos.x)}, ${Math.round(pos.y)})`);
-  }, [getStagePos]);
+  }, [getMousePos]);
 
-  const addTextBox = useCallback(() => {
-    const stage = stageRef.current?.getStage();
-    if (!stage) return;
-    const pos = getStagePos({ target: stage });
-    const newTextBox: TextBox = {
-      id: `text-${Date.now()}`,
-      x: pos.x,
-      y: pos.y,
-      text: 'Double click to edit',
-      width: 150,
-      height: 40,
-    };
-    const newTextBoxes = [...textBoxes, newTextBox];
-    setTextBoxes(newTextBoxes);
-    
-    if (socket && roomId && !isUpdatingFromSocket) {
-      console.log('Syncing text box creation:', { textBoxes: newTextBoxes.length, roomId });
-      setTimeout(() => {
-        socket.emit('whiteboard-update', { 
-          lines, 
-          textBoxes: newTextBoxes, 
-          shapes, 
-          roomId 
-        });
-      }, 200);
-    }
-    setSelectedTextBoxId(newTextBox.id);
-    saveState();
-  }, [saveState, getStagePos, socket, roomId, isUpdatingFromSocket, lines, shapes]);
-
-  const startDrawing = useCallback((e: any) => {
-    console.log('startDrawing:', { tool: currentTool, isDrawing, target: e.target.getClassName() });
-    if (currentTool === 'text' && (e.target.getClassName() === 'Text' || e.target.getParent()?.getClassName() === 'Text')) {
-      return;
-    }
-    if (currentTool === 'select' && e.target === e.target.getStage()) {
-      setIsDraggingStage(true);
-      setLastPointerPosition({
-        x: e.evt.clientX,
-        y: e.evt.clientY,
-      });
-      return;
-    }
-    if (currentTool === 'text') {
-      addTextBox();
-      return;
-    }
+  const startDrawing = useCallback((e: React.MouseEvent) => {
     setIsDrawing(true);
-    const pos = getStagePos(e);
-    if (currentTool === 'pen') {
-      const newLine: LineData = {
-        points: [pos.x, pos.y],
-        color: currentColor,
-        size: currentSize,
-        tool: currentTool,
-      };
-      setCurrentLine(newLine);
-      setLines((prev) => [...prev, newLine]);
-    } else if (['rectangle', 'circle', 'line'].includes(currentTool)) {
-      const newShape: Shape = {
-        id: `shape-${Date.now()}`,
-        type: currentTool as 'rectangle' | 'circle' | 'line',
-        x: pos.x,
-        y: pos.y,
-        width: 0,
-        height: 0,
-        color: currentColor,
-        strokeWidth: currentSize,
-      };
-      setCurrentShape(newShape);
-    }
-  }, [currentTool, currentColor, currentSize, getStagePos, addTextBox]);
+    const pos = getMousePos(e);
+    setStartPos(pos);
 
-  const draw = useCallback((e: any) => {
-    if (isDraggingStage) {
-      e.evt.preventDefault();
-      const stage = stageRef.current;
-      const point = stage.getPointerPosition();
-      if (!point) return;
-      setStagePosition({
-        x: stagePosition.x + (point.x - lastPointerPosition.x),
-        y: stagePosition.y + (point.y - lastPointerPosition.y),
-      });
-      setLastPointerPosition({ x: point.x, y: point.y });
-      return;
+    const canvas = canvasRef.current;
+    if (canvas && ctx.current && currentTool !== 'pen' && currentTool !== 'eraser') {
+      setSavedImageData(ctx.current.getImageData(0, 0, canvas.width, canvas.height));
     }
-    if (!isDrawing || isUpdatingFromSocket) return;
-    const pos = getStagePos(e);
+
+    if (ctx.current && (currentTool === 'pen' || currentTool === 'eraser')) {
+      ctx.current.beginPath();
+      ctx.current.moveTo(pos.x, pos.y);
+    }
+  }, [currentTool, getMousePos]);
+
+  const draw = useCallback((e: React.MouseEvent) => {
+    if (!isDrawing || !ctx.current) return;
+
+    const pos = getMousePos(e);
     updateCoordinates(e);
-    if (currentTool === 'pen' && currentLine) {
-      const updatedLine = {
-        ...currentLine,
-        points: [...currentLine.points, pos.x, pos.y],
-      };
-      setCurrentLine(updatedLine);
-      setLines((prevLines) => {
-        const newLines = [...prevLines];
-        if (newLines.length > 0 && newLines[newLines.length - 1] === currentLine) {
-          newLines[newLines.length - 1] = updatedLine;
-        } else {
-          newLines.push(updatedLine);
+
+    ctx.current.lineWidth = currentSize;
+    ctx.current.strokeStyle = currentTool === 'eraser' ? '#FFFFFF' : currentColor;
+    ctx.current.globalCompositeOperation = currentTool === 'eraser' ? 'destination-out' : 'source-over';
+
+    switch (currentTool) {
+      case 'pen':
+      case 'eraser':
+        ctx.current.lineTo(pos.x, pos.y);
+        ctx.current.stroke();
+        break;
+      case 'rectangle':
+        if (savedImageData) {
+          ctx.current.putImageData(savedImageData, 0, 0);
+          drawRectangle(startPos.x, startPos.y, pos.x - startPos.x, pos.y - startPos.y);
         }
-        return newLines;
-      });
-    } else if (currentShape && ['rectangle', 'circle', 'line'].includes(currentTool)) {
-      setCurrentShape((prev) => prev && ({
-        ...prev,
-        width: pos.x - prev.x,
-        height: pos.y - prev.y,
-      }));
+        break;
+      case 'circle':
+        if (savedImageData) {
+          ctx.current.putImageData(savedImageData, 0, 0);
+          drawCircle(startPos.x, startPos.y, pos.x, pos.y);
+        }
+        break;
+      case 'line':
+        if (savedImageData) {
+          ctx.current.putImageData(savedImageData, 0, 0);
+          drawLine(startPos.x, startPos.y, pos.x, pos.y);
+        }
+        break;
     }
-  }, [isDrawing, isDraggingStage, currentTool, currentLine, currentShape, getStagePos, updateCoordinates, stagePosition, lastPointerPosition, isUpdatingFromSocket]);
+  }, [isDrawing, currentTool, currentSize, currentColor, savedImageData, startPos, getMousePos, updateCoordinates]);
+
+  const drawRectangle = useCallback((x: number, y: number, width: number, height: number) => {
+    if (!ctx.current) return;
+    ctx.current.strokeStyle = currentColor;
+    ctx.current.lineWidth = currentSize;
+    ctx.current.strokeRect(x, y, width, height);
+  }, [currentColor, currentSize]);
+
+  const drawCircle = useCallback((x1: number, y1: number, x2: number, y2: number) => {
+    if (!ctx.current) return;
+    const radius = Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
+    ctx.current.strokeStyle = currentColor;
+    ctx.current.lineWidth = currentSize;
+    ctx.current.beginPath();
+    ctx.current.arc(x1, y1, radius, 0, 2 * Math.PI);
+    ctx.current.stroke();
+  }, [currentColor, currentSize]);
+
+  const drawLine = useCallback((x1: number, y1: number, x2: number, y2: number) => {
+    if (!ctx.current) return;
+    ctx.current.strokeStyle = currentColor;
+    ctx.current.lineWidth = currentSize;
+    ctx.current.beginPath();
+    ctx.current.moveTo(x1, y1);
+    ctx.current.lineTo(x2, y2);
+    ctx.current.stroke();
+  }, [currentColor, currentSize]);
 
   const stopDrawing = useCallback(() => {
-    if (isDraggingStage) {
-      setIsDraggingStage(false);
-      return;
-    }
     if (isDrawing) {
-      if (currentTool === 'pen' && currentLine) {
-        setLines((prevLines) => {
-          const newLines = [...prevLines];
-          if (newLines.length > 0 && newLines[newLines.length - 1] === currentLine) {
-            newLines[newLines.length - 1] = { ...currentLine };
-          } else {
-            newLines.push({ ...currentLine });
-          }
-          return newLines;
-        });
-        setCurrentLine(null);
-      } else if (currentShape && ['rectangle', 'circle', 'line'].includes(currentTool)) {
-        if (Math.abs(currentShape.width) > 5 && Math.abs(currentShape.height) > 5) {
-          const newShapes = [...shapes, { ...currentShape }];
-          setShapes(newShapes);
-          
-          if (socket && roomId && !isUpdatingFromSocket) {
-            console.log('Syncing shape creation:', { 
-              shapes: newShapes.length, 
-              roomId,
-              isClearing,
-              isUpdatingFromSocket
-            });
-            setTimeout(() => {
-              socket.emit('whiteboard-update', { 
-                lines, 
-                textBoxes, 
-                shapes: newShapes, 
-                roomId 
-              });
-            }, 200);
-          }
-        }
-        setCurrentShape(null);
-      }
+      setIsDrawing(false);
+      if (ctx.current) ctx.current.globalCompositeOperation = 'source-over';
+      setSavedImageData(null);
       saveState();
     }
-    setIsDrawing(false);
-  }, [isDrawing, isDraggingStage, currentTool, currentLine, currentShape, saveState, socket, roomId, isUpdatingFromSocket, lines, textBoxes]);
+  }, [isDrawing, saveState]);
 
-  const handleTextBoxDoubleClick = useCallback((e: any, id: string) => {
-    e.evt.stopPropagation();
-    const textBox = textBoxes.find((tb) => tb.id === id);
-    if (!textBox) return;
-
-    const existingTextareas = document.querySelectorAll('textarea.whiteboard-textarea');
-    existingTextareas.forEach((textarea) => textarea.remove());
-
-    const stage = stageRef.current?.getStage();
-    if (!stage) return;
-
-    const absolutePos = stage.getAbsolutePosition();
-    const scaledX = textBox.x * stageScale + stagePosition.x + absolutePos.x;
-    const scaledY = textBox.y * stageScale + stagePosition.y + absolutePos.y;
-
-    const textarea = document.createElement('textarea');
-    textarea.className = 'whiteboard-textarea';
-    textarea.value = textBox.text;
-    textarea.style.position = 'absolute';
-    textarea.style.left = `${scaledX}px`;
-    textarea.style.top = `${scaledY}px`;
-    textarea.style.width = `${textBox.width * stageScale}px`;
-    textarea.style.height = `${textBox.height * stageScale}px`;
-    textarea.style.fontSize = `${16 * stageScale}px`;
-    textarea.style.padding = '10px';
-    textarea.style.border = '2px solid #007bff';
-    textarea.style.borderRadius = '5px';
-    textarea.style.zIndex = '1000';
-    textarea.style.background = 'white';
-    textarea.style.boxShadow = '0 4px 8px rgba(0,0,0,0.1)';
-    textarea.style.resize = 'none';
-
-    const finishEditing = () => {
-      const newText = textarea.value;
-      const updatedTextBoxes = textBoxes.map((tb) =>
-        tb.id === id ? { ...tb, text: newText } : tb
-      );
-      setTextBoxes(updatedTextBoxes);
-      
-      if (socket && roomId && !isUpdatingFromSocket) {
-        setTimeout(() => {
-          socket.emit('whiteboard-update', { 
-            lines, 
-            textBoxes: updatedTextBoxes, 
-            shapes, 
-            roomId 
-          });
-        }, 200);
-      }
-      textarea.remove();
-      saveState();
+  const updateCursor = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const cursors: Record<string, string> = {
+      pen: 'crosshair',
+      eraser: 'grab',
+      rectangle: 'crosshair',
+      circle: 'crosshair',
+      line: 'crosshair',
     };
+    canvas.style.cursor = cursors[currentTool] || 'crosshair';
+  }, [currentTool]);
 
-    textarea.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        finishEditing();
-      } else if (e.key === 'Escape') {
-        textarea.remove();
-      }
-    });
-
-    textarea.addEventListener('blur', finishEditing);
-    document.body.appendChild(textarea);
-    textarea.focus();
-  }, [textBoxes, saveState, stageScale, stagePosition]);
-
-  const handleTextBoxSelect = useCallback((e: any, id: string) => {
-    e.evt.stopPropagation();
-    setSelectedTextBoxId(id);
+  const getCanvasData = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    return {
+      dataURL: canvas.toDataURL(),
+      width: canvas.width,
+      height: canvas.height,
+      timestamp: Date.now(),
+    };
   }, []);
-
-  const handleTextBoxDragEnd = useCallback((e: any, id: string) => {
-    const updatedTextBoxes = textBoxes.map((tb) =>
-      tb.id === id ? { ...tb, x: e.target.x(), y: e.target.y() } : tb
-    );
-    setTextBoxes(updatedTextBoxes);
-    
-    if (socket && roomId && !isUpdatingFromSocket) {
-      setTimeout(() => {
-        socket.emit('whiteboard-update', { 
-          lines, 
-          textBoxes: updatedTextBoxes, 
-          shapes, 
-          roomId 
-        });
-      }, 200);
-    }
-    saveState();
-  }, [saveState, socket, roomId, isUpdatingFromSocket, lines, shapes, textBoxes]);
 
   useEffect(() => {
-    if (transformerRef.current && selectedTextBoxId) {
-      const stage = stageRef.current?.getStage();
-      if (stage) {
-        const node = stage.findOne(`#${selectedTextBoxId}`);
-        if (node) {
-          transformerRef.current.nodes([node]);
-          transformerRef.current.getLayer().batchDraw();
-        } else {
-          console.warn(`Text box with ID ${selectedTextBoxId} not found`);
-        }
-      }
-    } else if (transformerRef.current) {
-      transformerRef.current.nodes([]);
-      transformerRef.current.getLayer().batchDraw();
-    }
-  }, [selectedTextBoxId]);
-
-  const handleStageClick = useCallback((e: any) => {
-    if (e.target === e.target.getStage()) {
-      setSelectedTextBoxId(null);
-    }
-  }, []);
-
-  const handleWheel = useCallback((e: any) => {
-    e.evt.preventDefault();
-    const stage = e.target.getStage();
-    if (!stage) return;
-
-    const oldScale = stageScale;
-    const pointer = stage.getPointerPosition();
-    if (!pointer) return;
-
-    const deltaY = e.evt.deltaY / 100;
-    const scaleBy = 1.1;
-    const newScale = deltaY > 0 ? oldScale / scaleBy : oldScale * scaleBy;
-
-    const clampedScale = Math.max(0.1, Math.min(10, newScale));
-    if (clampedScale === oldScale) return;
-
-    const mousePointTo = {
-      x: (pointer.x - stagePosition.x) / oldScale,
-      y: (pointer.y - stagePosition.y) / oldScale,
-    };
-
-    setStageScale(clampedScale);
-    setStagePosition({
-      x: pointer.x - mousePointTo.x * clampedScale,
-      y: pointer.y - mousePointTo.y * clampedScale,
-    });
-  }, [stageScale, stagePosition]);
-
-  const resetView = useCallback(() => {
-    setStageScale(1);
-    setStagePosition({ x: 0, y: 0 });
-  }, []);
-
-  const renderedLines = useMemo(() => {
-    return lines.map((line, i) => (
-      <Line
-        key={`line-${i}-${line.points.length}`}
-        points={line.points}
-        stroke={line.color}
-        strokeWidth={line.size}
-        tension={0.5}
-        lineCap="round"
-        lineJoin="round"
-        globalCompositeOperation="source-over"
-      />
-    ));
-  }, [lines]);
-
-  const renderedShapes = useMemo(() => {
-    return shapes.map((shape) => {
-      if (shape.type === 'rectangle') {
-        return (
-          <Rect
-            key={shape.id}
-            x={shape.x}
-            y={shape.y}
-            width={shape.width}
-            height={shape.height}
-            stroke={shape.color}
-            strokeWidth={shape.strokeWidth}
-            fill="transparent"
-          />
-        );
-      } else if (shape.type === 'circle') {
-        const radius = Math.max(Math.abs(shape.width), Math.abs(shape.height)) / 2;
-        return (
-          <Circle
-            key={shape.id}
-            x={shape.x + shape.width / 2}
-            y={shape.y + shape.height / 2}
-            radius={radius}
-            stroke={shape.color}
-            strokeWidth={shape.strokeWidth}
-            fill="transparent"
-          />
-        );
-      } else if (shape.type === 'line') {
-        return (
-          <Line
-            key={shape.id}
-            points={[shape.x, shape.y, shape.x + shape.width, shape.y + shape.height]}
-            stroke={shape.color}
-            strokeWidth={shape.strokeWidth}
-          />
-        );
-      }
-      return null;
-    });
-  }, [shapes]);
-
-  if (!isClient) {
-    return (
-      <div className="h-full flex flex-col bg-white border border-gray-300 rounded-lg">
-        <div className="p-3 bg-gray-100 border-b border-gray-300">
-          <div className="text-sm font-medium text-gray-700">🎨 Infinity Whiteboard</div>
-        </div>
-        <div className="flex-1 flex items-center justify-center">
-          <p>Loading whiteboard...</p>
-        </div>
-      </div>
-    );
-  }
-
-  console.log('Whiteboard Debug:', {
-    socket: !!socket,
-    socketConnected: socket?.connected,
-    roomId,
-    isUpdatingFromSocket,
-    linesCount: lines.length,
-    textBoxesCount: textBoxes.length,
-    shapesCount: shapes.length
-  });
+    updateCursor();
+  }, [currentTool, updateCursor]);
 
   return (
     <div className="h-full flex flex-col bg-white border border-gray-300 rounded-lg">
       <div className="p-3 bg-gray-100 border-b border-gray-300 flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2">
-          <div className="text-sm font-medium text-gray-700">🎨 Infinity Whiteboard</div>
-          <div className={`w-2 h-2 rounded-full ${socket?.connected ? 'bg-green-500' : 'bg-red-500'}`}></div>
-          <span className="text-xs text-gray-500">
-            {socket?.connected ? 'Connected' : 'Disconnected'} | Room: {roomId || 'None'}
-          </span>
+          <span className="text-sm font-medium text-gray-700">🎨 Custom Whiteboard</span>
+          {roomId && (
+            <span className="text-xs text-gray-500">
+              {socket?.connected ? '● Live' : '○ Offline'} · Room: {roomId}
+            </span>
+          )}
         </div>
+
         <div className="flex items-center gap-2 flex-wrap">
           <div className="flex gap-1 bg-white p-1 rounded">
-            {['select', 'pen', 'rectangle', 'circle', 'line', 'text'].map((tool) => (
+            {['pen', 'eraser', 'rectangle', 'circle', 'line'].map((tool) => (
               <button
                 key={tool}
                 onClick={() => setCurrentTool(tool)}
@@ -788,21 +336,22 @@ export const CustomWhiteboard = () => {
                 }`}
                 title={tool.charAt(0).toUpperCase() + tool.slice(1)}
               >
-                {tool === 'select' && '✋'}
                 {tool === 'pen' && '✏️'}
+                {tool === 'eraser' && '🧽'}
                 {tool === 'rectangle' && '⬜'}
                 {tool === 'circle' && '⭕'}
                 {tool === 'line' && '📏'}
-                {tool === 'text' && '📝'}
               </button>
             ))}
           </div>
+
           <input
             type="color"
             value={currentColor}
             onChange={(e) => setCurrentColor(e.target.value)}
             className="w-8 h-8 cursor-pointer"
           />
+
           <div className="flex items-center gap-2">
             <input
               type="range"
@@ -814,19 +363,7 @@ export const CustomWhiteboard = () => {
             />
             <span className="text-sm text-gray-600 w-6">{currentSize}px</span>
           </div>
-          <button
-            onClick={resetView}
-            className="p-2 bg-gray-500 text-white rounded text-sm"
-            title="Reset View"
-          >
-            🔍
-          </button>
-          <ShareButton 
-            code=""
-            language="whiteboard"
-            drawingData={{ dataURL: stageRef.current?.toDataURL?.() || '', width: 1000, height: 1000, timestamp: Date.now() }}
-            onShare={(url) => setShareUrl(url)}
-          />
+
           <div className="flex gap-1">
             <button
               onClick={undo}
@@ -851,147 +388,39 @@ export const CustomWhiteboard = () => {
             >
               🗑️
             </button>
-            <button
-              onClick={downloadCanvas}
-              className="p-2 bg-green-500 text-white rounded text-sm"
-              title="Download Image"
-            >
-              📥
-            </button>
+            <ShareButton
+              code=""
+              language="whiteboard"
+              drawingData={getCanvasData() ?? undefined}
+              roomId={roomId ?? undefined}
+            />
           </div>
         </div>
       </div>
-      <div className="flex-1 relative overflow-hidden">
-        <Stage
-          ref={stageRef}
-          width={window.innerWidth - 40}
-          height={window.innerHeight - 150}
-          scaleX={stageScale}
-          scaleY={stageScale}
-          x={stagePosition.x}
-          y={stagePosition.y}
+
+      <div className="flex-1 relative min-h-0">
+        <canvas
+          ref={canvasRef}
           onMouseDown={startDrawing}
           onMouseMove={draw}
           onMouseUp={stopDrawing}
-          onMouseLeave={stopDrawing}
+          onMouseOut={stopDrawing}
           onMouseEnter={updateCoordinates}
-          onClick={handleStageClick}
-          onWheel={handleWheel}
-          draggable={currentTool === 'select'}
-        >
-          <Layer ref={layerRef}>
-            {renderedLines}
-            {renderedShapes}
-            {currentShape && (
-              <>
-                {currentShape.type === 'rectangle' && (
-                  <Rect
-                    x={currentShape.x}
-                    y={currentShape.y}
-                    width={currentShape.width}
-                    height={currentShape.height}
-                    stroke={currentShape.color}
-                    strokeWidth={currentShape.strokeWidth}
-                    fill="transparent"
-                    dash={[5, 5]}
-                  />
-                )}
-                {currentShape.type === 'circle' && (
-                  <Circle
-                    x={currentShape.x + currentShape.width / 2}
-                    y={currentShape.y + currentShape.height / 2}
-                    radius={Math.max(Math.abs(currentShape.width), Math.abs(currentShape.height)) / 2}
-                    stroke={currentShape.color}
-                    strokeWidth={currentShape.strokeWidth}
-                    fill="transparent"
-                    dash={[5, 5]}
-                  />
-                )}
-                {currentShape.type === 'line' && (
-                  <Line
-                    points={[currentShape.x, currentShape.y, currentShape.x + currentShape.width, currentShape.y + currentShape.height]}
-                    stroke={currentShape.color}
-                    strokeWidth={currentShape.strokeWidth}
-                    dash={[5, 5]}
-                  />
-                )}
-              </>
-            )}
-            {textBoxes.map((textBox) => (
-              <Text
-                key={textBox.id}
-                id={textBox.id}
-                x={textBox.x}
-                y={textBox.y}
-                text={textBox.text}
-                width={textBox.width}
-                height={textBox.height}
-                fontSize={16}
-                fontFamily="Arial"
-                padding={10}
-                align="left"
-                verticalAlign="middle"
-                fill="#000000"
-                draggable={currentTool === 'select'}
-                onClick={(e) => handleTextBoxSelect(e, textBox.id)}
-                onDblClick={(e) => handleTextBoxDoubleClick(e, textBox.id)}
-                onDragEnd={(e) => handleTextBoxDragEnd(e, textBox.id)}
-                onTransformEnd={(e) => {
-                  const node = e.target;
-                  const scaleX = node.scaleX();
-                  const scaleY = node.scaleY();
-                  node.scaleX(1);
-                  node.scaleY(1);
-                  const updatedTextBoxes = textBoxes.map((tb) =>
-                    tb.id === textBox.id
-                      ? {
-                          ...tb,
-                          x: node.x(),
-                          y: node.y(),
-                          width: Math.max(50, node.width() * scaleX),
-                          height: Math.max(30, node.height() * scaleY),
-                        }
-                      : tb
-                  );
-                  setTextBoxes(updatedTextBoxes);
-                  
-                  if (socket && roomId && !isUpdatingFromSocket) {
-                    setTimeout(() => {
-                      socket.emit('whiteboard-update', { 
-                        lines, 
-                        textBoxes: updatedTextBoxes, 
-                        shapes, 
-                        roomId 
-                      });
-                    }, 200);
-                  }
-                  saveState();
-                }}
-              />
-            ))}
-            <Transformer
-              ref={transformerRef}
-              enabledAnchors={['middle-left', 'middle-right around-top-center', 'bottom-center']}
-              boundBoxFunc={(oldBox, newBox) => {
-                newBox.width = Math.max(50, newBox.width);
-                newBox.height = Math.max(30, newBox.height);
-                return newBox;
-              }}
-            />
-          </Layer>
-        </Stage>
+          className="absolute inset-0 w-full h-full"
+          style={{ cursor: currentTool === 'pen' ? 'crosshair' : 'default' }}
+        />
       </div>
+
       <div className="p-2 bg-gray-100 border-t border-gray-300 text-sm text-gray-600 flex justify-between">
         <div>{coordinates}</div>
         <div className="flex gap-4">
-          <span>Current tool: {currentTool} • {currentTool === 'select' ? 'Drag to pan, wheel to zoom' : 'Click and drag to draw'}</span>
-          {shareUrl && (
-            <span className="text-blue-600">
-              Shared: <a href={shareUrl} className="underline" target="_blank" rel="noopener noreferrer">View</a>
-            </span>
-          )}
+          <span>
+            {roomId ? 'Real-time sync with room • ' : ''}Press and drag to draw
+          </span>
         </div>
       </div>
     </div>
   );
 };
+
+export default CustomWhiteboard;

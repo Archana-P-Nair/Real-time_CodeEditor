@@ -121,7 +121,7 @@ io.on("connection", (socket) => {
       users: [user], 
       code: '', 
       language: 'python',
-      whiteboard: { lines: [], textBoxes: [], shapes: [] },
+      whiteboard: {},
       flowchart: { elements: [], mermaidCode: '' }
     });
     console.log(`Room created: ${roomId} by ${username}`);
@@ -151,7 +151,7 @@ io.on("connection", (socket) => {
         users: room.users, 
         code: room.code, 
         language: room.language,
-        whiteboard: room.whiteboard || { lines: [], textBoxes: [], shapes: [] },
+        whiteboard: room.whiteboard || {},
         flowchart: room.flowchart || { elements: [], mermaidCode: '' }
       });
       io.to(roomId).emit("users-update", room.users);
@@ -182,25 +182,27 @@ io.on("connection", (socket) => {
     }
   });
 
-  // Whiteboard event handlers
-  socket.on("whiteboard-update", ({ lines, textBoxes, shapes, roomId, clearOperationId }) => {
+  // Whiteboard event handlers (supports canvas dataURL for real-time canvas whiteboard)
+  socket.on("whiteboard-update", (payload: { roomId: string; lines?: any[]; textBoxes?: any[]; shapes?: any[]; canvasDataURL?: string; clearOperationId?: number }) => {
+    const { roomId, clearOperationId } = payload;
     if (roomId && rooms.has(roomId)) {
       const room = rooms.get(roomId);
-      room.whiteboard = { lines, textBoxes, shapes };
-      socket.to(roomId).emit("whiteboard-update", { lines, textBoxes, shapes, clearOperationId });
-      console.log(`Whiteboard updated in room ${roomId} by user ${socket.id}`, {
-        linesCount: lines?.length || 0,
-        textBoxesCount: textBoxes?.length || 0,
-        shapesCount: shapes?.length || 0,
-        isClearOperation: clearOperationId ? true : false
-      });
+      if (payload.canvasDataURL !== undefined) {
+        room.whiteboard = { canvasDataURL: payload.canvasDataURL };
+        socket.to(roomId).emit("whiteboard-update", { canvasDataURL: payload.canvasDataURL, clearOperationId });
+        console.log(`Whiteboard (canvas) updated in room ${roomId} by user ${socket.id}`);
+      } else if (payload.lines !== undefined || payload.textBoxes !== undefined || payload.shapes !== undefined) {
+        room.whiteboard = { lines: payload.lines ?? [], textBoxes: payload.textBoxes ?? [], shapes: payload.shapes ?? [] };
+        socket.to(roomId).emit("whiteboard-update", { lines: room.whiteboard.lines, textBoxes: room.whiteboard.textBoxes, shapes: room.whiteboard.shapes, clearOperationId });
+        console.log(`Whiteboard (konva) updated in room ${roomId} by user ${socket.id}`);
+      }
     }
   });
 
   socket.on("request-whiteboard-state", ({ roomId }) => {
     if (roomId && rooms.has(roomId)) {
       const room = rooms.get(roomId);
-      socket.emit("whiteboard-state", room.whiteboard || { lines: [], textBoxes: [], shapes: [] });
+      socket.emit("whiteboard-state", room.whiteboard || {});
       console.log(`Whiteboard state requested by user ${socket.id} in room ${roomId}`);
     }
   });

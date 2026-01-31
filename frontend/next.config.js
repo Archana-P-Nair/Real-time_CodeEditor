@@ -1,14 +1,13 @@
+const path = require('path');
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  webpack: (config, { isServer }) => {
-    if (!isServer) {
-      config.resolve.fallback = {
-        ...config.resolve.fallback,
-        canvas: false,
-        // Optionally stub konva to ensure no server-side imports
-        konva: false,
-      };
-    }
+  webpack: (config) => {
+    // Stub 'canvas' so Konva's Node entry doesn't break the build.
+    config.resolve.alias = {
+      ...config.resolve.alias,
+      canvas: path.resolve(__dirname, 'src/canvas-stub.js'),
+    };
     return config;
   },
 };

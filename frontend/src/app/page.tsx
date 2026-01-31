@@ -1,16 +1,10 @@
 "use client";
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
-import dynamic from 'next/dynamic';
+import { useRouter, useSearchParams } from "next/navigation";
 import { CodeEditor } from "@/components/CodeEditor";
+import { WhiteboardWrapper } from "@/components/WhiteboardWrapper";
 import { isShareUrl } from "@/lib/shareUtils";
-import { useSocket } from "@/contexts/SocketContext"; // adjust path if needed
-
-// Dynamic import for CustomWhiteboard to disable SSR
-const CustomWhiteboard = dynamic(
-  () => import('@/components/CustomWhiteboard'),
-  { ssr: false }
-);
+import { useSocket } from "@/contexts/SocketContext";
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<"editor" | "whiteboard">("editor");
@@ -19,7 +13,17 @@ export default function Home() {
   const [username, setUsername] = useState("");
   const [roomId, setRoomId] = useState("");
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { createRoom, joinRoom } = useSocket();
+
+  // When opening an invite link (?room=XXX), pre-fill room and show join modal
+  useEffect(() => {
+    const roomFromUrl = searchParams.get("room");
+    if (roomFromUrl?.trim()) {
+      setRoomId(roomFromUrl.trim());
+      setIsLoginModalOpen(true);
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     // Redirect to share page if URL is a share link
@@ -103,7 +107,7 @@ export default function Home() {
               />
             </div>
             <div className="w-1/2">
-              <CustomWhiteboard />
+              <WhiteboardWrapper />
             </div>
           </div>
         ) : (
@@ -118,7 +122,7 @@ export default function Home() {
                 roomId={roomId}
               />
             ) : (
-              <CustomWhiteboard />
+              <WhiteboardWrapper />
             )}
           </div>
         )}

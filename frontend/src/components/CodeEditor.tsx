@@ -363,15 +363,6 @@ export const CodeEditor = ({
     }
   };
 
-  // Check for room ID in URL parameters
-  useEffect(() => {
-    const urlParams = new URLSearchParams(window.location.search);
-    const roomParam = urlParams.get('room');
-    if (roomParam) {
-      // You could auto-join the room here if desired
-    }
-  }, []);
-
   const toggleDictionaryVisibility = () => {
     setIsDictionaryVisible(!isDictionaryVisible);
   };
@@ -506,6 +497,7 @@ export const CodeEditor = ({
         isOpen={isLoginModalOpen} 
         onJoinRoom={onJoinRoom}
         onCreateRoom={onCreateRoom}
+        initialRoomId={roomId}
       />
       
       

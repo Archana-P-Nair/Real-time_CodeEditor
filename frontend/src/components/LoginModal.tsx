@@ -1,18 +1,28 @@
 "use client";
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { X, User, Key, Plus, Users } from 'lucide-react';
 
 interface LoginModalProps {
   isOpen: boolean;
   onJoinRoom: (username: string, roomId: string) => void;
   onCreateRoom: (username: string) => void;
+  /** When set (e.g. from invite link ?room=XXX), pre-fill room ID and show Join tab */
+  initialRoomId?: string;
 }
 
-const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onJoinRoom, onCreateRoom }) => {
+const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onJoinRoom, onCreateRoom, initialRoomId }) => {
   const [username, setUsername] = useState('');
   const [roomId, setRoomId] = useState('');
   const [activeTab, setActiveTab] = useState<'join' | 'create'>('create');
+
+  // When opened with an invite link (?room=XXX), pre-fill room and switch to Join tab
+  useEffect(() => {
+    if (isOpen && initialRoomId?.trim()) {
+      setRoomId(initialRoomId.trim());
+      setActiveTab('join');
+    }
+  }, [isOpen, initialRoomId]);
 
   const handleJoinSubmit = (e: React.FormEvent) => {
     e.preventDefault();
